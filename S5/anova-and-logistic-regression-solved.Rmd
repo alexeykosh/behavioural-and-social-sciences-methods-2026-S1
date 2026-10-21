@@ -1,0 +1,344 @@
+---
+title: "ANOVA and logistic regression practical"
+geometry: margin=0.8in
+output:
+  pdf_document: default
+  html_document: default
+---
+
+## From two groups to three
+
+We saw the simulated experiment with three ways of learning material: 
+**rehearsal** (reviewing notes), **imagery** (making visual representations), 
+and **retrieval** (trying to explain the material from memory). We will use the 
+same simulated memory scores as in class. These are teaching data, not results 
+from a real study.
+
+With three groups, there are three possible pairwise comparisons. If three
+tests were independent and each used $\alpha=0.05$, the chance of at least one
+false positive when all null hypotheses are true would be
+$1-(1-0.05)^3 \approx 0.143$. Therefore, we want to use an alternative method to 
+figure out whether means differ across groups. ANOVA starts with one overall 
+question: **are all three population means equal?**
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+
+set.seed(2026)
+memory <- tibble(
+  strategy = factor(rep(c("rehearsal", "imagery", "retrieval"), each = 30),
+                    levels = c("rehearsal", "imagery", "retrieval")),
+  score = c(rnorm(30, 12, 2), rnorm(30, 14, 2), rnorm(30, 16, 2))
+)
+
+memory %>%
+  group_by(strategy) %>%
+  summarise(n = n(), mean_score = mean(score), sd_score = sd(score),
+            .groups = "drop")
+```
+
+```{r fig.height=2.8, echo=FALSE}
+ggplot(memory, aes(x = strategy, y = score)) +
+  geom_jitter(width = 0.1, height = 0, alpha = 0.6) +
+  stat_summary(fun = mean, geom = "point", colour = "#C44E52", size = 3) +
+  labs(x = "Learning strategy", y = "Memory score")
+```
+
+### Practice 1
+
+Use your `group_by()` skills to check whether the three group sizes and means. 
+Name the outcome and predictor. Which group has the highest sample mean? 
+
+```{r}
+strategy_summary <- memory %>%
+  group_by(strategy) %>%
+  summarise(n = n(), mean_score = mean(score), sd_score = sd(score),
+            .groups = "drop")
+strategy_summary
+strategy_summary %>% slice_max(mean_score, n = 1)
+```
+
+Each group contains **30 participants**. The sample means are **11.86** for
+rehearsal, **13.70** for imagery, and **16.07** for retrieval, which has the
+highest sample mean. The outcome is memory `score`; the predictor is the
+three-level categorical variable `strategy`.
+
+## A three-group comparison is a linear model
+
+With rehearsal as the reference group, the model is
+
+$$score_i = \beta_0 + \beta_1 imagery_i + \beta_2 retrieval_i + \epsilon_i.$$
+
+### Practice 2
+
+$\beta_0$ estimates the rehearsal mean. The other coefficients estimate each
+group's difference from rehearsal. The coefficient table does not directly
+test whether **all three** means are equal. Fit the group model using the `lm` 
+function. Put it in the `m_groups` variable.
+
+```{r}
+m_groups <- lm(score ~ strategy, data = memory)
+```
+
+This model estimates a separate mean score for each strategy, using rehearsal
+as the reference group.
+
+Look at the coefficients from the model. Do they match your summary statistics
+from above?
+
+```{r}
+summary(m_groups)
+coef(m_groups)
+strategy_summary %>%
+  mutate(difference_from_rehearsal =
+           mean_score - mean_score[strategy == "rehearsal"])
+```
+
+Yes. The intercept is the rehearsal mean, **11.8551**. The imagery coefficient
+is **1.8491**, the imagery mean minus the rehearsal mean; the retrieval
+coefficient is **4.2132**, the retrieval mean minus the rehearsal mean.
+Adding each coefficient to the intercept recovers its group's sample mean.
+
+## ANOVA compares a common mean with three group means
+
+The **null model** predicts the same overall mean for everyone. The **group
+model** predicts a separate mean for each strategy. A residual is an observed
+score minus its model prediction. The residual sum of squares (RSS) adds the
+squared residuals; smaller RSS means a closer fit to these observations.
+
+```{r}
+m_common <- lm(score ~ 1, data = memory)
+rss_common <- sum(residuals(m_common)^2)
+rss_groups <- sum(residuals(m_groups)^2)
+round(c(common_mean = rss_common, group_means = rss_groups), 1)
+```
+
+Adding group means will improve in-sample fit even when the population means
+are equal. The $F$ statistic accounts for the two extra parameters:
+
+$$F = \frac{(RSS_{common}-RSS_{groups})/(k-1)}
+              {RSS_{groups}/(n-k)},$$
+
+where $k=3$ groups and $n=90$ observations. The numerator measures improvement
+per added parameter; the denominator measures remaining error per residual
+degree of freedom.
+
+### Practice 3
+
+Calculate $F$ from `rss_common` and `rss_groups` using the formula above
+(write the an R function to compute it). Why do we divide by $k-1=2$ in the
+numerator and $n-k=87$ in the denominator? 
+
+```{r}
+compute_f <- function(rss_common, rss_groups, k, n) {
+  ((rss_common - rss_groups) / (k - 1)) / (rss_groups / (n - k))
+}
+
+f_manual <- compute_f(rss_common, rss_groups,
+                      k = nlevels(memory$strategy), n = nrow(memory))
+f_manual
+stopifnot(isTRUE(all.equal(f_manual, anova(m_common, m_groups)$F[2])))
+```
+
+The calculation gives **F = 33.579**. The group model has three mean
+parameters instead of one, so it adds $k-1=2$ parameters: dividing the RSS
+reduction by 2 gives the explained variation per added parameter. Estimating
+three group means from 90 observations leaves $n-k=87$ residual degrees of
+freedom: dividing the group model's RSS by 87 estimates the remaining error
+variance.
+
+Use `anova(m_common, m_groups)` below to check your calculation.
+
+```{r}
+anova(m_common, m_groups)
+```
+
+### Practice 4
+
+From `anova(m_common, m_groups)`, report $F$ and the p value.
+At $\alpha=0.05$, which hypothesis do you reject? Does the table tell you
+which pair of strategies differs? 
+
+The result is **$F(2,87)=33.579$**, with **$p=1.558\times 10^{-11}$**.
+At 0.05, we reject the null hypothesis that all three population means are
+equal: there is evidence that at least one mean differs. The overall ANOVA
+table does not identify which pairs differ; that requires planned contrasts
+or pairwise comparisons with an appropriate adjustment for multiple testing.
+
+## Logistic regression with an included R dataset
+
+For a new example, we will use `birthwt`, included with R's recommended `MASS` package. 
+It records 189 births. Our question is: **how is the probability of low infant birth weight associated
+with the mother's weight before pregnancy?** This is observational data, so an
+association is not evidence that changing maternal weight would change an infant's birth weight.
+
+The outcome `low` is already coded **1 = birth weight below 2.5 kg** and
+**0 = at least 2.5 kg**. The predictor `lwt` is the mother's weight in pounds. 
+We centre it at the sample mean and divide by 10, so one unit of `weight10` means 
+ten pounds. No extra data file is needed.
+
+```{r}
+births <- as_tibble(MASS::birthwt) %>%
+  mutate(weight10 = (lwt - mean(lwt)) / 10)
+births %>% count(low)
+```
+Let's look at some summary stats for mother's weight.
+
+```{r}
+summary(births$lwt)
+```
+
+
+### Practice 5
+
+Fin the observed proportion of low-weight births.
+
+```{r}
+observed_low <- mean(births$low)
+c(low_weight_births = sum(births$low),
+  total_births = nrow(births),
+  proportion = observed_low,
+  percent = 100 * observed_low)
+range(births$lwt)
+```
+
+There are **59 low-weight births out of 189**, an observed proportion of
+**0.3122**, or **31.22%**. Maternal weights in these data range from **80 to
+250 pounds**.
+
+Let's look at the distribution:
+
+```{r fig.height=2.5, echo=FALSE}
+ggplot(births, aes(x = lwt, y = low)) +
+  geom_jitter(height = 0.04, width = 0, alpha = 0.5) +
+  scale_y_continuous(breaks = c(0, 1), labels = c("At least 2.5 kg", "Below 2.5 kg")) +
+  labs(x = "Maternal weight (pounds)", y = "Infant birth weight")
+```
+
+## From a straight line to logistic regression
+
+For a 0/1 outcome, the mean is a proportion. A straight-line model can
+nevertheless predict values outside 0 to 1. This is not what we want 
+in our model.
+
+```{r}
+m_linear <- lm(low ~ lwt, data = births)
+predict(m_linear, newdata = tibble(lwt = 400))
+```
+
+### Practice 6
+
+Compare the prediction at 400 pounds with the observed range from Practice 5.
+Is it a valid probability? Why should it not be treated as a finding about
+people weighing 400 pounds?
+
+The straight-line prediction at 400 pounds is **-0.3842**, which is not a valid
+probability because it is below zero. The observed maternal weights range
+from **80 to 250 pounds**, so 400 pounds is outside the data: this prediction
+is an extrapolation of the fitted line and should not be interpreted as an
+empirical finding about people weighing 400 pounds.
+
+Logistic regression models the **log odds** of low birth weight:
+
+$$\log\left(\frac{p}{1-p}\right) = \beta_0 + \beta_1 weight10,$$
+
+where $p=P(low=1)$ and odds are $p/(1-p)$. `plogis()` converts log odds to a
+probability between zero and one.
+
+Start with an intercept-only model. Its fitted probability should equal the
+observed proportion of low birth weight in the sample.
+
+```{r}
+g_common <- glm(low ~ 1, data = births, family = binomial)
+coef(g_common)
+plogis(coef(g_common))
+```
+
+### Practice 7
+
+Compare `plogis(coef(g_common))` with `mean(births$low)` from Practice 5. Are
+they equal?
+
+```{r}
+fitted_common <- unname(plogis(coef(g_common)))
+c(intercept_only_probability = fitted_common,
+  observed_proportion = observed_low)
+isTRUE(all.equal(fitted_common, observed_low))
+```
+
+Yes. Both equal **0.3121693** (up to numerical precision). An intercept-only
+binomial logistic model gives everyone the same fitted probability, equal to
+the sample proportion of outcomes coded 1.
+
+## Interpreting a ten-pound change
+
+### Practice 8
+
+Fit the full model with `glm()`. The coefficient for
+`weight10` is the change in **log odds** for a ten-pound increase in maternal
+weight. `exp()` turns it into an **odds ratio** for that same change. 
+
+```{r}
+g_weight <- glm(low ~ weight10, data = births, family = binomial)
+summary(g_weight)
+c(log_odds_change_per_10_lb = coef(g_weight)["weight10"],
+  odds_ratio_per_10_lb = exp(coef(g_weight)["weight10"]))
+```
+
+The `weight10` coefficient is **-0.1406**: a ten-pound increase in maternal
+weight is associated with a decrease of 0.1406 in the log odds of low birth
+weight. The odds ratio is **0.8689**, corresponding to about **13.1% lower
+odds** per ten pounds. This is an odds change, not a constant change in
+probability or percentage points.
+
+Let's look at our model:
+
+```{r fig.height=2.5, echo=FALSE, message=FALSE}
+ggplot(births, aes(x = lwt, y = low)) +
+  geom_jitter(height = 0.04, width = 0, alpha = 0.4) +
+  geom_smooth(method = "glm", method.args = list(family = binomial),
+              se = FALSE, colour = "#C44E52") +
+  scale_y_continuous(breaks = c(0, 0.5, 1)) +
+  coord_cartesian(ylim = c(0, 1)) +
+  labs(x = "Maternal weight (pounds)",
+       y = "Fitted probability of low birth weight")
+```
+
+`predict(..., type = "response")` gives fitted probabilities instead of log
+odds. These predictions use two maternal weights within the observed range.
+
+```{r}
+new_weights <- tibble(lwt = c(100, 150)) %>%
+  mutate(weight10 = (lwt - mean(births$lwt)) / 10)
+new_weights %>%
+  mutate(predicted_low = predict(g_weight, newdata = new_weights,
+                                 type = "response"))
+```
+
+### Practice 9
+
+Compare the fitted probabilities at 100 and 150 pounds. Subtract them to
+report the difference in **percentage points**. Write two sentences that
+separate the sample association from a causal claim. What other factors might
+matter for low birth weight that this one-predictor model does not include?
+
+```{r}
+weight_predictions <- new_weights %>%
+  mutate(predicted_low = predict(g_weight, newdata = new_weights,
+                                 type = "response"))
+weight_predictions
+
+difference_percentage_points <- with(
+  weight_predictions,
+  100 * (predicted_low[lwt == 150] - predicted_low[lwt == 100])
+)
+difference_percentage_points
+```
+
+In this sample, the model associates a maternal weight of 150 pounds with a
+**24.78%** fitted probability of low birth weight, compared with **39.95%** at
+100 pounds, a difference of **-15.17 percentage points** (150 minus 100 pounds).
+This observational association does not show that increasing maternal weight
+would cause a reduction in low birth weight, because other relevant factors,
+such as smoking, maternal age, hypertension, and previous premature births,
+are not included in this model.

@@ -1,0 +1,256 @@
+---
+title: "Difference tests and effect sizes with behavioural inhibition data"
+geometry: margin=0.8in
+output:
+  pdf_document: default
+  html_document: default
+---
+
+## Return to the mood experiment
+
+We will use the same 58 participants from Paál et al. (2015) as in the earlier
+practicals. Each person completed a stop-signal task after either a neutral or
+negative mood induction. A longer stop-signal reaction time (SSRT) means slower
+inhibition. The two conditions contain *different people*, so this is a
+between-participants comparison.
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+
+d <- read_csv(
+  "https://dfzljdn9uc3pi.cloudfront.net/2015/964/1/data_supplement.csv",
+  show_col_types = FALSE
+) %>%
+  rename(Participant = 1) %>%
+  mutate(Condition = factor(
+    Mood_induction_condition,
+    levels = c(2, 1),
+    labels = c("Neutral", "Negative")
+  ))
+
+d %>% select(Participant, Age, Condition, SSRT) %>% slice_head(n = 6)
+```
+
+First, look at the observations and group summaries. These tell us about the
+sample, but do not yet tell us how uncertain the difference is.
+
+```{r fig.height=2.4}
+ggplot(d, aes(x = Condition, y = SSRT)) +
+  geom_boxplot(width = 0.5, outlier.shape = NA) +
+  geom_jitter(width = 0.12, height = 0, alpha = 0.6) +
+  labs(x = "Mood condition", y = "SSRT (ms)")
+```
+
+Now let's look at summary statistics again.
+
+```{r}
+group_summary <- d %>%
+  group_by(Condition) %>%
+  summarise(n = n(), mean_SSRT = mean(SSRT), sd_SSRT = sd(SSRT),
+            .groups = "drop")
+group_summary
+```
+
+### Practice 1
+
+Calculate the differences between means, i.e. Negative - Neutral using the 
+means estimated above. What can you tell about the difference? What are the
+units that it is measured in?
+
+```{r}
+mean_difference <- with(
+  group_summary,
+  mean_SSRT[Condition == "Negative"] - mean_SSRT[Condition == "Neutral"]
+)
+mean_difference
+```
+
+The Negative group's mean SSRT is 242.09 ms and the Neutral group's mean is
+234.52 ms. Negative minus Neutral is **7.57 ms**: the Negative group had slower
+inhibition on average in this sample. The difference is measured in milliseconds;
+these sample means alone do not establish a population difference.
+
+## A difference test is a linear model
+
+The model is
+
+$$SSRT_i = \beta_0 + \beta_1 Condition_i + \epsilon_i,$$
+
+where `Condition` is 0 for Neutral and 1 for Negative. Thus $\beta_0$ is the
+Neutral mean and $\beta_1$ is **Negative minus Neutral**. Under the null
+hypothesis, the population difference is zero: $H_0: \beta_1 = 0$.
+
+```{r}
+m_mood <- lm(SSRT ~ Condition, data = d)
+summary(m_mood)
+```
+We can also look at the confidence intervals.
+
+
+```{r}
+confint(m_mood)
+```
+
+
+### Practice 2
+
+Compare the model's intercept and condition coefficient with the means and
+difference from Practice 1. Read the coefficient's standard error and compute
+its $t$ value by hand using
+
+$$t = \frac{\text{estimated difference} - 0}{SE(\text{estimated difference})}.$$
+
+Check your answer against the `t value` column above. Did you get the same value?
+
+```{r}
+mood_coefficients <- summary(m_mood)$coefficients
+c(neutral_mean = group_summary$mean_SSRT[group_summary$Condition == "Neutral"],
+  model_intercept = coef(m_mood)["(Intercept)"],
+  mean_difference = mean_difference,
+  model_difference = coef(m_mood)["ConditionNegative"])
+
+condition_se <- mood_coefficients["ConditionNegative", "Std. Error"]
+t_by_hand <- (mean_difference - 0) / condition_se
+c(standard_error = condition_se,
+  t_by_hand = t_by_hand,
+  model_t = mood_coefficients["ConditionNegative", "t value"])
+```
+
+The intercept equals the Neutral mean, **234.52 ms**, and the condition
+coefficient equals Negative minus Neutral, **7.57 ms**. Its standard error is
+**11.60 ms**, so the hand calculation gives $t = 7.5688/11.6003 = 0.6525$,
+matching the model's `t value` (up to rounding).
+
+## From a t value to a p value
+
+For this two-sided test, the p value is the probability, **assuming a zero
+population difference**, of a $t$ value at least as far from zero as the one
+observed. It is not the probability that the null hypothesis is true. 
+
+`pt(x, df)` gives the probability to the *left* of `x` on a $t$ distribution.
+We can use the negative absolute value to obtain one tail, then double it for
+a two-sided p value.
+
+```{r}
+t_observed <- summary(m_mood)$coefficients["ConditionNegative", "t value"]
+df <- nrow(d) - 2
+2 * pt(-abs(t_observed), df = df)
+```
+
+### Practice 3
+
+What are the degrees of freedom and the two-sided p value? At a 0.05
+threshold, would you reject $H_0$? Does this result establish that the two
+population means are equal? Explain briefly.
+
+For a direction chosen *before seeing the data*, calculate the one-sided p
+value for $H_1$: Negative mood leads to longer mean SSRT. How does it
+relate to the two-sided value here?
+
+```{r}
+df_mood <- df.residual(m_mood)
+p_two_sided <- 2 * pt(-abs(t_observed), df = df_mood)
+p_one_sided <- pt(t_observed, df = df_mood, lower.tail = FALSE)
+c(df = df_mood, two_sided_p = p_two_sided, one_sided_p = p_one_sided)
+```
+
+There are **56 degrees of freedom** and the two-sided p value is **0.5168**.
+At 0.05, we do not reject the null hypothesis of a zero population mean
+difference. This does not establish equality: a non-significant result can also
+reflect an imprecise estimate.
+
+For the prespecified alternative that Negative mood increases mean SSRT,
+the one-sided p value is **0.2584**. It is half the two-sided value here because
+the observed difference points in the hypothesised direction; the one-sided
+result also does not reach 0.05.
+
+## The same test without writing a model
+
+For two independent groups, `t.test()` can test a difference in means. Here
+`var.equal = TRUE` requests the same pooled-variance used by `lm()`.
+`t.test()` subtracts the *second* factor level from the first in its printed
+order (Neutral minus Negative here), so its $t$ value has the opposite sign
+from `ConditionNegative`.
+
+```{r}
+t.test(SSRT ~ Condition, data = d, var.equal = TRUE)
+```
+
+### Practice 4
+
+Compare the absolute $t$ value, degrees of freedom, p value, and 95%
+confidence interval with the model results. Reverse the interval's signs to
+express it as Negative minus Neutral. Does the interval include zero?
+
+What happens if you say that variance is different? `var.equal = FALSE`.
+
+```{r}
+t_pooled <- t.test(SSRT ~ Condition, data = d, var.equal = TRUE)
+c(abs_t_test = abs(unname(t_pooled$statistic)),
+  abs_t_model = abs(t_observed),
+  df_test = unname(t_pooled$parameter),
+  df_model = df.residual(m_mood),
+  p_test = t_pooled$p.value,
+  p_model = p_two_sided)
+
+pooled_ci <- -rev(t_pooled$conf.int)
+rbind(pooled_negative_minus_neutral = unname(pooled_ci),
+      model_negative_minus_neutral = confint(m_mood)["ConditionNegative", ])
+
+t_welch <- t.test(SSRT ~ Condition, data = d, var.equal = FALSE)
+t_welch
+setNames(-rev(t_welch$conf.int), c("lower", "upper"))
+```
+
+The pooled test and linear model give the same absolute $t$ (**0.6525**),
+degrees of freedom (**56**), and two-sided p value (**0.5168**). The test's
+printed interval is for Neutral minus Negative; reversing its signs and endpoint
+order gives **[-15.67, 30.81] ms**, exactly the model's interval for Negative
+minus Neutral. This interval includes zero.
+
+With `var.equal = FALSE`, Welch's test does not assume equal population
+variances. It gives $t = -0.6593$, approximately **53.15** degrees of freedom,
+and $p = 0.5125$. Its interval for Negative minus Neutral is
+**[-15.45, 30.59] ms**. The numerical results change slightly, but the interval
+still includes zero and the conclusion at 0.05 is unchanged.
+
+## Cohen's d: the size of the difference
+
+A p value alone does not tell us how large a difference is. Cohen's $d$
+expresses the mean difference in pooled standard-deviation units:
+
+$$s_p = \sqrt{\frac{(n_0-1)s_0^2 + (n_1-1)s_1^2}{n_0+n_1-2}},
+\qquad d = \frac{\bar{x}_{Negative}-\bar{x}_{Neutral}}{s_p}.$$
+
+The weights matter here because the groups contain 28 and 30 people. $d$ has no
+units; the unstandardised difference remains useful because it is in milliseconds.
+
+### Practice 5
+
+Use `group_summary` to calculate $s_p$ and Cohen's $d$. What does the sign
+mean? Report both $d$ and the difference in milliseconds. Which measure is
+easier to interpret?
+
+```{r}
+pooled_sd <- with(
+  group_summary,
+  sqrt(sum((n - 1) * sd_SSRT^2) / (sum(n) - 2))
+)
+cohens_d <- mean_difference / pooled_sd
+c(pooled_sd_ms = pooled_sd,
+  difference_ms = mean_difference,
+  cohens_d = cohens_d)
+```
+
+The pooled standard deviation is **44.15 ms**, giving **Cohen's d = 0.171**
+and an unstandardised difference of **7.57 ms** (Negative minus Neutral).
+The positive sign means that the Negative group has a longer mean SSRT.
+The difference is about 0.17 pooled standard deviations and is small relative
+to the within-group variation. Milliseconds are easier to interpret for this
+task because they express the extra stopping time directly; $d$ is unitless
+and useful for comparing standardised differences across measures.
+
+
+**Source.** The dataset is from Paál, Carpenter, and Nettle (2015),
+[*Childhood socioeconomic deprivation, but not current mood, is associated
+with behavioural disinhibition in adults*](https://doi.org/10.7717/peerj.964).
