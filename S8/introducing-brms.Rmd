@@ -1,0 +1,248 @@
+---
+title: "Introducing brms"
+geometry: margin=0.8in
+output:
+  pdf_document: default
+  html_document: default
+header-includes:
+  - \usepackage{float}
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, error = FALSE,
+                      fig.width = 6.2, fig.height = 2.3,
+                      fig.align = "center", fig.pos = "H", out.width = "90%")
+```
+
+## 1. Simulate height and weight
+
+**Question:** how does weight change with height?
+
+We will be using simulated data seen in class. You need to install `brms` using the `install.packages` function in R.
+
+```{r}
+library(brms)
+library(tidyverse)
+
+set.seed(123)
+n <- 100
+height <- rnorm(n, mean = 177, sd = 10)
+weight <- 75 + 8 * as.numeric(scale(height)) + rnorm(n, sd = 7)
+
+d <- data.frame(height, weight)
+head(d)
+```
+
+Now we need to z-score height by subtracting the mean from each observation and
+dividing it by the standard deviation. How would you do that? Modify the original 
+data frame `d`. 
+
+```{r}
+### YOUR CODE HERE ###
+```
+
+
+`height_z = 0` means average sample height; `height_z = 1` means one sample
+standard deviation above it. Let's look at the distribution of transformed height:
+
+```{r}
+ggplot(data=d, aes(x=height_z)) +
+  geom_density() +
+  theme_bw()
+```
+
+What does a one-unit increase mean in centimeters once we z-scored the height?
+What is the mean height?
+
+```{r}
+### YOUR CODE HERE ###
+```
+
+## 2. The model and its priors
+
+$$weight_i \sim \operatorname{Normal}(\mu_i, \sigma)$$
+$$\mu_i = \beta_0 + \beta_1 height\_z_i.$$
+
+- **Intercept:** average weight at average height, in kg.
+- **Slope:** change in mean weight per one SD of height, in kg.
+- **Sigma:** remaining variation around the line, in kg.
+
+`brms` uses familiar R formulas and Stan to sample from the posterior.
+
+```{r}
+priors <- c(
+  prior(normal(75, 10), class = "Intercept"),
+  prior(normal(8, 4), class = "b", coef = "height_z")
+)
+```
+
+In `normal(mean, SD)`, the second number is a **standard deviation**.
+The [sigma prior](https://paulbuerkner.com/brms/reference/set_prior.html)
+is restricted to positive values: a half-normal distribution.
+We will not set a prior over sigma, we will just assume that it is equal to 7,
+as we did in class.
+
+Let's do a prior predictive check, i.e. look at the predictions our model makes
+before seeing the data!
+
+```{r}
+fit_prior <- brm(
+  bf(weight ~ 1 + height_z, sigma = 7),
+  data = d,
+  family = gaussian(),
+  prior = priors,
+  seed = 123,
+  backend = "cmdstanr",
+  sample_prior = "only" # this is where we say to only sample prior
+)
+```
+
+Now let's visualize 100 possible slopes under this prior: 
+
+```{r}
+plot(conditional_effects(fit_prior, "height_z", 
+                         spaghetti = TRUE, ndraws = 100), 
+     points = FALSE)
+```
+
+## 3. Fit the data with brm()
+
+Now we can fit the model:
+
+```{r, results='hide'}
+fit <- brm(
+  bf(weight ~ 1 + height_z, sigma = 7),
+  data = d,
+  family = gaussian(),
+  prior = priors,
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 123,
+  backend = "cmdstanr",
+  sample_prior = "yes"
+)
+```
+
+## 4. Inspect estimates and diagnostics
+
+`brms` uses similar functions to `lm()` -- we can just call the summary of the
+model and examine it:
+
+```{r}
+summary(fit)
+```
+`Estimate` is the posterior mean; `Est.Error` is the posterior SD.
+`l-95% CI` and `u-95% CI` bound a central 95% **credible interval**.
+
+You can also check whether the sampling of the posterior parameters was correct. 
+You should look for dense bands of noise in each chain.The model explores the posterior distribution, wandering through the parameter space to find and map out the most likely parameter values given both your priors and your data.
+
+```{r, fig.height=3.4}
+plot(fit, variable = c("b_Intercept", "b_height_z"))
+```
+
+## 5. Check posterior shrinkage 
+
+Let's check whether the posterior is narrower than the prior -- if it is not the
+case, something is wrong with the fit. You do need to look at this code in 
+detail, but you can reuse it in the future if needed.
+
+```{r}
+post_samples <- as_draws_df(fit)
+prior_samples <- as_draws_df(fit_prior)
+
+df_intercept <- rbind(
+  data.frame(Val = post_samples$b_Intercept, Type = "Posterior", Param = "Intercept"),
+  data.frame(Val = prior_samples$b_Intercept, Type = "Prior", Param = "Intercept")
+)
+
+df_height <- rbind(
+  data.frame(Val = post_samples$b_height_z, Type = "Posterior", Param = "height_z"),
+  data.frame(Val = prior_samples$b_height_z, Type = "Prior", Param = "height_z")
+)
+
+df_all <- rbind(df_intercept, df_height)
+
+ggplot(df_all, aes(x = Val, fill = Type)) +
+  geom_density(alpha = 0.5) +
+  facet_wrap(~Param, scales = "free") +
+  theme_bw()
+```
+
+Now let's look at our posterior samples. Each row is one joint draw of plausible parameter values.
+
+```{r}
+posterior <- as_draws_df(fit)
+head(posterior)
+```
+
+What is the probability that the slope is negative? Remember that `b_height_z`
+stores the probability distribution: 
+
+```{r}
+### YOUR CODE HERE ###
+```
+
+Estimate the posterior probability that the slope exceeds **8 kg per SD**.
+Change the condition in `mean()` above.
+
+```{r}
+### YOUR CODE HERE ###
+```
+
+## 6. Can the model reproduce the data?
+
+Finally, remember that you are predicting the Normal distribution of height. 
+You can compare you model predicted distributions with the observed one using]
+the function `pp_check` in `brms`:
+
+```{r, fig.height=2.2}
+pp_check(fit, ndraws = 50)
+```
+
+## 7. Predict mean weight
+
+`fitted()` summarises uncertainty about **mean weight** at each height.
+
+```{r}
+new_d <- data.frame(height_z = seq(-2.5, 2.5, length.out = 100))
+pred_df <- cbind(new_d, fitted(fit, newdata = new_d))
+
+ggplot(pred_df, aes(height_z, Estimate)) +
+  geom_ribbon(aes(ymin = Q2.5, ymax = Q97.5), alpha = 0.2) +
+  geom_line() +
+  geom_point(data = d, aes(y = weight), alpha = 0.4) +
+  theme_bw() +
+  labs(x = "Height (z-score)", y = "Weight (kg)")
+```
+
+The ribbon is a pointwise 95% credible interval for mean weight.
+It does not describe the spread of individual weights.
+
+## 8. Predict an individual weight
+
+`predict()` also includes residual variation between people.
+
+```{r}
+average_height <- data.frame(height_z = 0)
+
+predict(fit, newdata = average_height)
+```
+
+### Practice
+
+What is the height in centimetres of a very tall person, 4 SD above the mean?
+What weight does the model predict for them? 
+
+What is the +3 SD height in cm?
+
+```{r}
+### YOUR CODE HERE ###
+```
+
+Now do the prediction:
+
+```{r}
+### YOUR CODE HERE ###
+```
