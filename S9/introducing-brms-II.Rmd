@@ -23,7 +23,7 @@ library(tidybayes)
 
 We generate the same data as in the previous practical:
 
-```{r linear-data}
+```{r}
 set.seed(123)
 n <- 100
 height <- rnorm(n, mean = 177, sd = 10)
@@ -34,7 +34,7 @@ d <- data.frame(height, height_z, weight)
 
 We use the same priors for the intercept and slope:
 
-```{r linear-fit, results='hide'}
+```{r}
 priors <- c(
   prior(normal(75, 10), class = "Intercept"),
   prior(normal(8, 4), class = "b", coef = "height_z")
@@ -68,7 +68,7 @@ mcmc_plot(fit, type = "areas")
 Each row is one posterior draw. The column `b_height_z` contains sampled 
 slope values.
 
-```{r linear-draws}
+```{r}
 post <- as_draws_df(fit)
 head(post)
 ```
@@ -86,13 +86,13 @@ ggplot(post, aes(x = b_height_z)) +
 What is the posterior probability that the slope is positive?
 We count the fraction of draws above zero:
 
-```{r slope-probability}
+```{r}
 mean(post$b_height_z > 0)
 ```
 
 Now calculate the probability that the slope exceeds **8 kg per SD of height**.
 
-```{r practice-slope, eval=FALSE}
+```{r}
 ##################
 # YOUR CODE HERE #
 ##################
@@ -100,7 +100,7 @@ Now calculate the probability that the slope exceeds **8 kg per SD of height**.
 
 Then calculate the probability that it lies between 6 and 10.
 
-```{r practice-slope, eval=FALSE}
+```{r}
 ##################
 # YOUR CODE HERE #
 ##################
@@ -108,13 +108,13 @@ Then calculate the probability that it lies between 6 and 10.
 
 A 95% credible interval contains 95% of the posterior probability:
 
-```{r slope-interval}
+```{r}
 quantile(post$b_height_z, c(0.025, 0.975))
 ```
 
 Can the model reproduce the observed height distribution?
 
-```{r predictive-check, fig.height=3}
+```{r fig.height=3}
 pp_check(fit, 
          type = "dens_overlay", 
          ndraws = 50)
@@ -126,7 +126,7 @@ pp_check(fit,
 Suppose we count errors in a test. Each row is
 a different participant. How does the count vary with hours of practice?
 
-```{r count-data}
+```{r}
 set.seed(456)
 practice <- runif(100, min = 0, max = 6)
 practice_z <- (practice - mean(practice)) / sd(practice)
@@ -140,11 +140,11 @@ head(counts)
 These are simulated data. As with height, a one-unit increase in `practice_z`
 means one SD of the original variable. How many hours is that?
 
-```{r practice-sd}
+```{r}
 sd(counts$practice)
 ```
 
-```{r count-plot}
+```{r}
 ggplot(counts, aes(practice_z, errors)) +
   geom_point() +
   theme_bw()
@@ -165,7 +165,7 @@ The priors are now on the log scale. An intercept of 1.8 corresponds to
 an expected count of $\exp(1.8)\approx6$ at average practice time.
 
 
-```{r poisson-fit, results='hide'}
+```{r results='hide'}
 priors_count <- c(
   prior(normal(1.8, 0.5), class = "Intercept"),
   prior(normal(0, 0.3), class = "b", coef = "practice_z")
@@ -180,13 +180,13 @@ fit_count <- brm(
 )
 ```
 
-```{r poisson-summary}
+```{r}
 summary(fit_count)
 ```
 
 Can the model reproduce the observed count distribution?
 
-```{r predictive-check, fig.height=3}
+```{rfig.height=3}
 pp_check(fit_count, type = "bars", ndraws = 30)
 ```
 
@@ -200,7 +200,7 @@ $$\frac{\lambda(x+1)}{\lambda(x)}=\exp(\beta_1).$$
 We can estimate the change per SD for our data. If we exponentiate our slope,
 we get the percentage points by which our score is multiplied with every increase:
 
-```{r count-ratio}
+```{r }
 post_count <- as_draws_df(fit_count)
 ratio <- exp(post_count$b_practice_z)
 
@@ -214,7 +214,7 @@ mean(ratio < 1)
 Let's predict the expected count at below-average, average, and above-average
 practice time:
 
-```{r predictions}
+```{r }
 new_d <- data.frame(practice_z = c(-1, 0, 1))
 
 predictions(fit_count, newdata = new_d, type = "response")
@@ -223,7 +223,7 @@ predictions(fit_count, newdata = new_d, type = "response")
 These intervals describe uncertainty about **expected counts**. The default
 Bayesian point estimates are posterior medians.
 
-```{r prediction-plot}
+```{r }
 plot_predictions(fit_count, condition = "practice_z", type = "response")
 ```
 
