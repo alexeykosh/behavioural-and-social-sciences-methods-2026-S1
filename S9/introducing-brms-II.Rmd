@@ -1,0 +1,232 @@
+---
+title: "Introducing brms II"
+geometry: margin=0.8in
+output:
+  pdf_document: default
+  html_document: default
+header-includes:
+  - \usepackage{float}
+---
+
+## 1. Bayesian linear regression, again
+
+We use the same data and priors as last time. Only height is z-scored;
+weight stays in kilograms. We still fix sigma at 7.
+
+```{r}
+library(brms)
+library(posterior)
+library(ggplot2)
+library(marginaleffects)
+library(tidybayes)
+```
+
+We generate the same data as in the previous practical:
+
+```{r linear-data}
+set.seed(123)
+n <- 100
+height <- rnorm(n, mean = 177, sd = 10)
+height_z <- (height - mean(height)) /sd(height)
+weight <- 75 + 8 * height_z + rnorm(n, sd = 7)
+d <- data.frame(height, height_z, weight)
+```
+
+We use the same priors for the intercept and slope:
+
+```{r linear-fit, results='hide'}
+priors <- c(
+  prior(normal(75, 10), class = "Intercept"),
+  prior(normal(8, 4), class = "b", coef = "height_z")
+)
+
+fit <- brm(
+  bf(weight ~ 1 + height_z, sigma = 7),
+  data = d, family = gaussian(), prior = priors,
+  chains = 4, iter = 2000, warmup = 1000,
+  seed = 123, backend = "cmdstanr"
+)
+```
+
+Remember that brms relies on almost the same syntax as base r:
+
+```{r}
+summary(fit)
+```
+What do the intercept and slope mean? What are their units?
+
+You can also use the integrated brms functionality to plot the posterior 
+distribution:
+
+```{r}
+mcmc_plot(fit, type = "areas") 
+```
+
+
+## 2. Interpret the posterior
+
+Each row is one posterior draw. The column `b_height_z` contains sampled 
+slope values.
+
+```{r linear-draws}
+post <- as_draws_df(fit)
+head(post)
+```
+
+The possible slope values are samples from the posterior distribution for the 
+slope parameter, we can plot them:
+
+```{r}
+ggplot(post, aes(x = b_height_z)) +
+  geom_density() +
+  theme_bw()
+```
+
+
+What is the posterior probability that the slope is positive?
+We count the fraction of draws above zero:
+
+```{r slope-probability}
+mean(post$b_height_z > 0)
+```
+
+Now calculate the probability that the slope exceeds **8 kg per SD of height**.
+
+```{r practice-slope, eval=FALSE}
+##################
+# YOUR CODE HERE #
+##################
+```
+
+Then calculate the probability that it lies between 6 and 10.
+
+```{r practice-slope, eval=FALSE}
+##################
+# YOUR CODE HERE #
+##################
+```
+
+A 95% credible interval contains 95% of the posterior probability:
+
+```{r slope-interval}
+quantile(post$b_height_z, c(0.025, 0.975))
+```
+
+Can the model reproduce the observed height distribution?
+
+```{r predictive-check, fig.height=3}
+pp_check(fit, 
+         type = "dens_overlay", 
+         ndraws = 50)
+```
+
+
+## 3. Simulate count data
+
+Suppose we count errors in a test. Each row is
+a different participant. How does the count vary with hours of practice?
+
+```{r count-data}
+set.seed(456)
+practice <- runif(100, min = 0, max = 6)
+practice_z <- (practice - mean(practice)) / sd(practice)
+lambda <- exp(1.8 - 0.3 * practice_z)
+errors <- rpois(100, lambda = lambda)
+
+counts <- data.frame(practice, practice_z, errors)
+head(counts)
+```
+
+These are simulated data. As with height, a one-unit increase in `practice_z`
+means one SD of the original variable. How many hours is that?
+
+```{r practice-sd}
+sd(counts$practice)
+```
+
+```{r count-plot}
+ggplot(counts, aes(practice_z, errors)) +
+  geom_point() +
+  theme_bw()
+```
+
+## 4. Fit a Poisson regression
+
+A Poisson distribution describes non-negative integer counts:
+
+$$disfluencies_i\sim\operatorname{Poisson}(\lambda_i)$$
+$$\log(\lambda_i)=\beta_0+\beta_1 practice\_z_i.$$
+
+
+Here, $\lambda_i$ is the expected count. The log link keeps it positive.
+We model the log of the **expected count**, not the log of the observations.
+
+The priors are now on the log scale. An intercept of 1.8 corresponds to
+an expected count of $\exp(1.8)\approx6$ at average practice time.
+
+
+```{r poisson-fit, results='hide'}
+priors_count <- c(
+  prior(normal(1.8, 0.5), class = "Intercept"),
+  prior(normal(0, 0.3), class = "b", coef = "practice_z")
+)
+
+fit_count <- brm(
+  errors ~ 1 + practice_z,
+  data = counts, family = poisson(link = "log"),
+  prior = priors_count,
+  chains = 4, iter = 2000, warmup = 1000,
+  seed = 456, backend = "cmdstanr"
+)
+```
+
+```{r poisson-summary}
+summary(fit_count)
+```
+
+Can the model reproduce the observed count distribution?
+
+```{r predictive-check, fig.height=3}
+pp_check(fit_count, type = "bars", ndraws = 30)
+```
+
+## 5. Interpret Poisson coefficients
+
+The slope describes a change in log expected count. Exponentiating it gives
+the factor by which the expected count changes per one SD of practice:
+
+$$\frac{\lambda(x+1)}{\lambda(x)}=\exp(\beta_1).$$
+
+We can estimate the change per SD for our data. If we exponentiate our slope,
+we get the percentage points by which our score is multiplied with every increase:
+
+```{r count-ratio}
+post_count <- as_draws_df(fit_count)
+ratio <- exp(post_count$b_practice_z)
+
+quantile(ratio, c(0.025, 0.5, 0.975))
+mean(ratio < 1)
+```
+
+
+## 6. Predict with marginaleffects
+
+Let's predict the expected count at below-average, average, and above-average
+practice time:
+
+```{r predictions}
+new_d <- data.frame(practice_z = c(-1, 0, 1))
+
+predictions(fit_count, newdata = new_d, type = "response")
+```
+
+These intervals describe uncertainty about **expected counts**. The default
+Bayesian point estimates are posterior medians.
+
+```{r prediction-plot}
+plot_predictions(fit_count, condition = "practice_z", type = "response")
+```
+
+Some of the predictions are not integers, what does that mean? What does the model
+predict?
+
